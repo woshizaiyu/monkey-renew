@@ -12,8 +12,7 @@
 |------------------|----------|------|
 | MONKEY_EMAIL     | ✅ 必填  | Monkey 登录邮箱 |
 | MONKEY_PASSWORD  | ✅ 必填  | Monkey 登录密码 |
-| MONKEY_SERVER_ID | ❌ 可选  | 服务器短 id；单服可留空（自动点第一台），多服/定位不准时填写 |
-| MONKEY_API_KEY   | ❌ 可选  | 面板 `Account Settings → API Credentials` 申请，仅用于状态查询，不能替代浏览器续期 |
+| MONKEY_REMEMBER  | ❌ 可选  | `remember_web_*` Cookie 值；有则先直登跳过整页盾，失效自动回退账密 |
 | NODE_LINK        | ❌ 可选  | 代理链接（vless/vmess/trojan/hysteria2/tuic/anytls/socks5），不填则直连 |
 | TG_BOT_TOKEN     | ❌ 可选  | Telegram Bot Token（用于发送通知） |
 | TG_CHAT_ID       | ❌ 可选  | Telegram Chat ID（接收通知的用户或群组 ID） |
@@ -36,7 +35,7 @@
 
 - 不要多账号薅羊毛，易封号。
 - GA 的 cron 会延迟几十分钟，属于正常现象。
-- 官方 Client API（`openapi.json` 实测）只有查服务器 3 个 GET 端点，**没有 confirm 端点**，所以 MVP 必须走浏览器模拟；`MONKEY_API_KEY` 只做查询增强。
+- 官方 Client API 只有查询端点，**没有 confirm 端点**，所以必须走浏览器模拟点确认键。
 
 ### ⚠️ 免责声明
 

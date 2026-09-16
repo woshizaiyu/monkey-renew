@@ -40,8 +40,7 @@ jobs:
         env:
           MONKEY_EMAIL: ${{ secrets.MONKEY_EMAIL }}
           MONKEY_PASSWORD: ${{ secrets.MONKEY_PASSWORD }}
-          MONKEY_SERVER_ID: ${{ secrets.MONKEY_SERVER_ID }}
-          MONKEY_API_KEY: ${{ secrets.MONKEY_API_KEY }}
+          MONKEY_REMEMBER: ${{ secrets.MONKEY_REMEMBER }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
         run: |

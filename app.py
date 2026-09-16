@@ -18,12 +18,11 @@ BASE = "https://dash.monkey-network.xyz"
 # ---- Secrets ( Actions 里配置, 也可私库直接填双引号内 ) ----
 MONKEY_EMAIL = os.environ.get("MONKEY_EMAIL") or ""
 MONKEY_PASSWORD = os.environ.get("MONKEY_PASSWORD") or ""
-# 单服 MVP 可留空(自动点第一台); 若有多服/定位不准, 手动填 server 短 id 或完整 uuid
-MONKEY_SERVER_ID = os.environ.get("MONKEY_SERVER_ID") or ""
 TG_CHAT_ID = os.environ.get("TG_CHAT_ID") or ""
 TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN") or ""
-# 官方 Client API Key(可选, 仅用于续期前查询状态, 无 confirm 端点所以不能替代浏览器)
-MONKEY_API_KEY = os.environ.get("MONKEY_API_KEY") or ""
+# Laravel remember_web Cookie(可选, 免过盾直登；失效自动回退账号密码)
+MONKEY_REMEMBER = os.environ.get("MONKEY_REMEMBER") or ""
+REMEMBER_COOKIE = "remember_web_59ba36addc2b2f9401580f014c7f58ea4e30989d"
 
 if not MONKEY_EMAIL or not MONKEY_PASSWORD:
     print("ℹ️ 未配置 MONKEY_EMAIL / MONKEY_PASSWORD, 脚本终止。")
@@ -109,6 +108,30 @@ _EXISTS_JS = """
 })()
 """
 
+# 点击前诊断：打印盾 iframe 的位置 + 窗口位置 + 缩放，用于判断落点偏没偏
+_DIAG_JS = """
+(function(){
+    var info = {frames: [], screenX: window.screenX || 0, screenY: window.screenY || 0,
+                outerW: window.outerWidth, outerH: window.outerHeight,
+                innerW: window.innerWidth, innerH: window.innerHeight,
+                dpr: window.devicePixelRatio || 1, scrollX: window.scrollX, scrollY: window.scrollY};
+    document.querySelectorAll('iframe').forEach(function(f){
+        if (f.src && f.src.includes('challenges.cloudflare.com')) {
+            var r = f.getBoundingClientRect();
+            info.frames.push({x: r.x, y: r.y, w: r.width, h: r.height});
+        }
+    });
+    return JSON.stringify(info);
+})()
+"""
+
+
+def log_click_diag(sb) -> None:
+    try:
+        print(f"📐 点击诊断: {sb.execute_script(_DIAG_JS)}")
+    except Exception as e:
+        print(f"⚠️ 诊断信息获取失败: {e}")
+
 _EXPAND_JS = """
 (function() {
     var ts = document.querySelector('input[name="cf-turnstile-response"]');
@@ -160,6 +183,7 @@ def try_click_turnstile(sb, rounds=6) -> None:
             print(f"✅ Turnstile 通过（第 {i} 次复检）")
             return
         print(f"🖱️ 第 {i} 次调用 uc_gui_click_captcha...")
+        log_click_diag(sb)
         try:
             sb.uc_gui_click_captcha()
         except Exception as e:
@@ -199,23 +223,56 @@ def get_current_ip(proxy_server: str = "") -> str:
     return r.text.strip()
 
 
-# ---------- 官方 API 状态查询 (可选增强, 失败不阻塞) ----------
-def query_api_status():
-    if not MONKEY_API_KEY:
-        return
-    try:
-        r = requests.get(
-            f"{BASE}/api/client",
-            headers={"Authorization": f"Bearer {MONKEY_API_KEY}", "Accept": "application/json"},
-            timeout=15,
-        )
-        print(f"🔎 Client API 状态: HTTP {r.status_code} (仅查询, 无 confirm 端点)")
-    except Exception as e:
-        print(f"⚠️ Client API 查询失败(忽略): {e}")
-
-
 # ---------- 登录 ----------
+def try_cookie_login(sb) -> bool:
+    """Cookie 直登(移植自 HidenCloud): 注入 remember_web 跳过整页盾.
+    成功返回 True；无 Cookie 或失效返回 False（调用方回退账号密码）。"""
+    if not MONKEY_REMEMBER:
+        return False
+    print("📇 尝试 Cookie 直登（跳过整页盾）...")
+    try:
+        sb.open(BASE)  # 先落到目标域，Selenium 才允许写该域 cookie
+        time.sleep(3)
+        sb.add_cookie({
+            "name": REMEMBER_COOKIE,
+            "value": MONKEY_REMEMBER,
+            "domain": "dash.monkey-network.xyz",
+            "path": "/",
+            "secure": True,
+        })
+        sb.open(BASE)
+        sb.sleep(4)
+        try:
+            url = sb.get_current_url() or ""
+            src = (sb.get_page_source() or "").lower()
+        except Exception:
+            return False
+        if "/auth" not in url and ("lifecycle" in src or "server" in src
+                                   or "dashboard" in src or "logout" in src):
+            print(f"✅ Cookie 登录成功，当前: {url}")
+            return True
+        print("⚠️ Cookie 失效，回退账号密码登录")
+        return False
+    except Exception as e:
+        print(f"⚠️ Cookie 登录异常（回退账号密码）: {e}")
+        return False
+
+
+def dump_remember_hint(sb) -> None:
+    """账号密码登录成功后，提示可存入 MONKEY_REMEMBER 的 cookie（仅首尾各 4 字符）。"""
+    try:
+        c = sb.get_cookie(REMEMBER_COOKIE)
+        v = (c.get("value", "") if c else "")
+        if v:
+            print(f"📇 本次 {REMEMBER_COOKIE[:20]}… 有效（{len(v)} 字符），"
+                  f"存入 MONKEY_REMEMBER 下次可免过盾: {v[:4]}...{v[-4:]}")
+    except Exception:
+        pass
+
+
 def login(sb) -> bool:
+    if try_cookie_login(sb):
+        return True
     print(f"🌐 打开登录页: {BASE}")
     sb.uc_open_with_reconnect(BASE, reconnect_time=5)
     time.sleep(5)
@@ -294,9 +351,11 @@ def login(sb) -> bool:
         if "/auth" not in url and ("lifecycle" in src or "server" in src or "dashboard" in src
                                    or "confirm" in src or "logout" in src):
             print(f"✅ 登录成功, 当前: {url}")
+            dump_remember_hint(sb)
             return True
         if "/auth" not in url and "sign in" not in src[:2000]:
             print(f"✅ 登录成功(宽松判定), 当前: {url}")
+            dump_remember_hint(sb)
             return True
         time.sleep(1)
     print(f"❌ 登录失败, 停留在: {sb.get_current_url()}")
@@ -307,20 +366,7 @@ def login(sb) -> bool:
 # ---------- 进服务器 -> Lifecycle ----------
 def goto_lifecycle(sb) -> bool:
     """进入 Lifecycle Tab. 成功返回 True (无论按钮是否可点)."""
-    # 方式0: 用户给了 SERVER_ID, 直试常见路由
-    if MONKEY_SERVER_ID:
-        for path in [f"/server/{MONKEY_SERVER_ID}/lifecycle", f"/server/{MONKEY_SERVER_ID}",
-                     f"/servers/{MONKEY_SERVER_ID}"]:
-            try:
-                sb.open(BASE + path)
-                sb.sleep(3)
-                src = (sb.get_page_source() or "").lower()
-                if "lifecycle" in src or "confirm" in src:
-                    print(f"✅ 直达 Lifecycle: {path}")
-                    return True
-            except Exception:
-                pass
-    # 方式1: 点第一台 server 卡片
+    # 方式1: 点第一台 server 卡片 (单服)
     try:
         sb.open(BASE)
         sb.sleep(4)
@@ -330,18 +376,7 @@ def goto_lifecycle(sb) -> bool:
         cards = sb.find_elements('a[href*="server"]')
     except Exception:
         cards = []
-    if MONKEY_SERVER_ID:
-        # 在卡片中优先找 id 匹配的
-        for c in cards:
-            try:
-                if MONKEY_SERVER_ID in (c.get_attribute("href") or ""):
-                    print(f"🖱️ 点击指定服务器: {MONKEY_SERVER_ID}")
-                    c.click()
-                    sb.sleep(4)
-                    break
-            except Exception:
-                pass
-    elif cards:
+    if cards:
         try:
             href = cards[0].get_attribute("href")
             print(f"🖱️ 点击第一台服务器: {href}")
@@ -489,7 +524,6 @@ def main():
             print(f"📍 当前出口IP: {ip}")
         except Exception as e:
             print(f"⚠️ 获取出口 IP 失败: {e}")
-        query_api_status()
         print("🚀 启动浏览器 ...")
         if not login(sb):
             notify("❌ 登录失败", error="邮箱/密码错误或 CF 盾未过, 请检查 Secrets 与代理")
