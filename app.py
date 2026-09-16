@@ -95,16 +95,82 @@ def wait_for_turnstile_pass(sb, timeout=25) -> bool:
     return False
 
 
-def try_click_turnstile(sb, rounds=3) -> None:
+# ---------- Turnstile / CF 探针 (移植自 katabump: 看 token 不看文案，中文换词不怕) ----------
+_SOLVED_JS = """
+(function(){
+    var i = document.querySelector('input[name="cf-turnstile-response"]');
+    return !!(i && i.value && i.value.length > 20);
+})()
+"""
+
+_EXISTS_JS = """
+(function(){
+    return document.querySelector('input[name="cf-turnstile-response"]') !== null;
+})()
+"""
+
+_EXPAND_JS = """
+(function() {
+    var ts = document.querySelector('input[name="cf-turnstile-response"]');
+    if (!ts) return 'no-turnstile';
+    var el = ts;
+    for (var i = 0; i < 20; i++) {
+        el = el.parentElement;
+        if (!el) break;
+        var s = window.getComputedStyle(el);
+        if (s.overflow === 'hidden' || s.overflowX === 'hidden' || s.overflowY === 'hidden')
+            el.style.overflow = 'visible';
+        el.style.minWidth = 'max-content';
+    }
+    document.querySelectorAll('iframe').forEach(function(f){
+        if (f.src && f.src.includes('challenges.cloudflare.com')) {
+            f.style.width = '300px'; f.style.height = '65px';
+            f.style.minWidth = '300px';
+            f.style.visibility = 'visible'; f.style.opacity = '1';
+        }
+    });
+    return 'done';
+})()
+"""
+
+
+def is_turnstile_solved(sb) -> bool:
+    try:
+        return bool(sb.execute_script(_SOLVED_JS))
+    except Exception:
+        return False
+
+
+def try_click_turnstile(sb, rounds=6) -> None:
+    try:
+        if is_turnstile_solved(sb):
+            print("✅ Turnstile 已静默通过")
+            return
+    except Exception:
+        pass
+    # 展开 widget，防止被父容器 overflow:hidden 裁剪导致点不到
+    for _ in range(3):
+        try:
+            sb.execute_script(_EXPAND_JS)
+        except Exception:
+            pass
+        time.sleep(0.5)
     for i in range(1, rounds + 1):
+        if is_turnstile_solved(sb):
+            print(f"✅ Turnstile 通过（第 {i} 次复检）")
+            return
+        print(f"🖱️ 第 {i} 次调用 uc_gui_click_captcha...")
         try:
             sb.uc_gui_click_captcha()
-            print(f"🖱️ 第 {i} 次尝试点击 Turnstile")
-            time.sleep(10)
         except Exception as e:
-            print(f"⚠️ 点击 Turnstile 出错: {e}")
-        if wait_for_turnstile_pass(sb, timeout=15):
-            return
+            print(f"⚠️ uc_gui_click_captcha 调用异常: {e}")
+        # 等待验证结果（最多 8 秒，每 0.5 秒复检 token）
+        for _ in range(16):
+            time.sleep(0.5)
+            if is_turnstile_solved(sb):
+                print(f"✅ Turnstile 通过（第 {i} 次尝试）")
+                return
+    print("❌ Turnstile 多轮点击均未通过")
 
 
 # ---------- React 表单填充 (抄 Lunes, 对受控组件有效) ----------
